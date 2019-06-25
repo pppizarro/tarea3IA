@@ -114,38 +114,31 @@ class Discriminator(nn.Module):
 class CNN(nn.Module):
   def __init__(self):
     super(CNN, self).__init__()
-    self.conv2d_1 = nn.Conv2d(3, 64, 3, 1, 1)
-    self.batch_normalization_1 = nn.BatchNorm2d(64)
-    self.conv2d_2 = nn.Conv2d(64, 64, 3, 1, 1)
-    self.batch_normalization_2 = nn.BatchNorm2d(64)
-    self.max_pooling2d_1 = nn.MaxPool2d(4)
-    self.dropout_1 = nn.Dropout(0.2)
-    self.conv2d_3 = nn.Conv2d(64, 64 * 2, 3, 1, 1 )
-    self.batch_normalization_3 = nn.BatchNorm2d(64 * 2)
-    self.conv2d_4 = nn.Conv2d(64 * 2, 64 * 2, 3, 1, 1 )
-    self.batch_normalization_4 = nn.BatchNorm2d(64 * 2)
-    self.max_pooling2d_2 = nn.MaxPool2d(4)
-    self.dropout_2 = nn.Dropout(0.3)
-    self.conv2d_5 = nn.Conv2d(64 * 2, 64 * 4, 3, 1, 1 )
-    self.batch_normalization_5 = nn.BatchNorm2d(64 * 4)
-    self.conv2d_6 = nn.Conv2d(64 * 4, 64 * 4, 3, 1, 1 )
-    self.batch_normalization_6 = nn.BatchNorm2d(64 * 4)
-    self.max_pooling2d_3 = nn.MaxPool2d(4)
-    self.dropout_3 = nn.Dropout(0.4)
-    self.output = nn.Linear(64 * 4, 10)
+    self.main = nn.Sequential(
+      # input is (3) x 64 x 64
+      nn.Conv2d(3, 64, 4, 2, 1, bias=False),
+      nn.LeakyReLU(0.2, inplace=True),
+      # state size. (64) x 32 x 32
+      nn.Conv2d(64, 64 * 2, 4, 2, 1, bias=False),
+      nn.BatchNorm2d(64 * 2),
+      nn.LeakyReLU(0.2, inplace=True),
+      # state size. (64*2) x 16 x 16
+      nn.Conv2d(64 * 2, 64 * 4, 4, 2, 1, bias=False),
+      nn.BatchNorm2d(64 * 4),
+      nn.LeakyReLU(0.2, inplace=True),
+      # state size. (64*4) x 8 x 8
+      nn.Conv2d(64 * 4, 64 * 8, 4, 2, 1, bias=False),
+      nn.BatchNorm2d(64 * 8),
+      nn.LeakyReLU(0.2, inplace=True),
+      # state size. (64*8) x 4 x 4
+    )
+    self.output = nn.Linear(64 * 8 * 4 * 4, 10)
 
-  def forward(self, x):
-    x = self.batch_normalization_1(F.elu(self.conv2d_1(x)))
-    x = self.batch_normalization_2(F.elu(self.conv2d_2(x)))
-    x = self.dropout_1(self.max_pooling2d_1(x))
-    x = self.batch_normalization_3(F.elu(self.conv2d_3(x)))
-    x = self.batch_normalization_4(F.elu(self.conv2d_4(x)))
-    x = self.dropout_2(self.max_pooling2d_2(x))
-    x = self.batch_normalization_5(F.elu(self.conv2d_5(x)))
-    x = self.batch_normalization_6(F.elu(self.conv2d_6(x)))
-    x = self.dropout_3(self.max_pooling2d_3(x))
-    x = self.output(x.flatten(1))
-    return x
+  def forward(self, input):
+    output = self.main(input)
+    
+    return self.output(output.flatten(1))
+    
 
 def weights_init(m):
   classname = m.__class__.__name__
@@ -158,25 +151,26 @@ def weights_init(m):
 def ganTraining(netD, netG, dataloader, device='cpu', epochs=1):
   criterion = nn.CrossEntropyLoss()
   batch_size = 64
-  fixed_noise = torch.randn(batch_size, 100, 1, 1, device=device)
+  fixed_noise = torch.randn(batch_size, 100, 1, 1, device=torch.device(device))
   optimizerD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
   optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
   for epoch in range(epochs):
     for i, data in enumerate(dataloader, 0):
+      batch_size = data[0].to(torch.device(device)).size()[0]
       ############################
       # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
       ###########################
       # train with real
       netD.zero_grad()
-      real_cpu = data[0].to(device)
-      label = data[1].to(device)
+      real_cpu = data[0].to(torch.device(device))
+      label = data[1].to(torch.device(device))
       output = netD(real_cpu)
       errD_real = criterion(output, label)
       errD_real.backward()
       D_x = output.mean().item()
 
       # train with fake
-      noise = torch.randn(batch_size, 100, 1, 1, device=device)
+      noise = torch.randn(batch_size, 100, 1, 1, device=torch.device(device))
       fake = netG(noise)
       label.fill_(10)
       output = netD(fake.detach())
@@ -213,15 +207,17 @@ def ganTraining(netD, netG, dataloader, device='cpu', epochs=1):
       # do checkpointing
       torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % ('.', epoch))
       torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % ('.', epoch))
+  torch.save(netG.state_dict(), './netG_final.pth')
+  torch.save(netD.state_dict(), './netD_final.pth')
 
-def cnnTraining(cnn, dataloader, device='cpu', epochs=1):
+def cnnTraining(cnn, dataloader, device='cpu', epochs=1, isNormalCNN=True):
   criterion = nn.CrossEntropyLoss()
   optimizer = optim.RMSprop(cnn.parameters(), lr=0.001, weight_decay=1e-6)
   for epoch in range(epochs):
     for i, data in enumerate(dataloader, 0):
       cnn.zero_grad()
-      real_cpu = data[0].to(device)
-      label = data[1].to(device)
+      real_cpu = data[0].to(torch.device(device))
+      label = data[1].to(torch.device(device))
       output = cnn(real_cpu)
       err = criterion(output, label)
       err.backward()
@@ -234,32 +230,86 @@ def cnnTraining(cnn, dataloader, device='cpu', epochs=1):
         err.item(), CNN_x))
       # do checkpointing
       torch.save(cnn.state_dict(), '%s/cnn_epoch_%d.pth' % ('.', epoch))
+  if isNormalCNN:
+    torch.save(cnn.state_dict(), 'cnn_normal_final.pth')
+  else:
+    torch.save(cnn.state_dict(), 'cnn_fake_final.pth')
     
 def generateFakeSet(netD, netG, device='cpu'):
   batch_size = 64
   images = torch.empty(1, 3, 64, 64)
   labels = torch.empty(1)
   while(labels.size()[0] < 1000):
-    noise = torch.randn(batch_size, 100, 1, 1, device=device)
+    print(images.size()[0])
+    #print(labels.size()[0])
+    noise = torch.randn(batch_size, 100, 1, 1, device=torch.device(device))
     batch_images = netG(noise)
-    _, batch_labels = torch.max(netD(images.detach()), 1)
-    for i in (batch_labels==10).nonzero():
-      batch_images = torch.cat([batch_images[0:i], batch_images[i+1:]])
-    batch_labels = batch_labels[batch_labels!=10]
-    images = torch.cat([images, batch_images])
-    labels = torch.cat([labels, batch_labels.float()])
+    _, batch_labels = torch.max(netD(batch_images.detach()), 1)
+    #print(batch_images.size())
+    for i in range(batch_labels.size()[0]):
+      if batch_labels[i] != 10:
+        images = torch.cat([images, batch_images[i].unsqueeze(0)])
+        labels = torch.cat([labels, batch_labels[i].unsqueeze(0).float()])
   return [images[1:], labels[1:]]
 
 if __name__ == "__main__":
-  device = 'cpu'
+  device = 'cuda:0'
   epochs = 1
   trainloader, testloader = loadData()
+  #discriminador y generador
   netD = Discriminator()
-  netD.apply(weights_init)
   netG = Generator()
-  netG.apply(weights_init)
+  netD.to(torch.device(device))
+  netG.to(torch.device(device))
+  shouldTrainGan = False
+  try:
+    netD.load_state_dict(torch.load('./netD_final.pth'))
+    print('pesos de discriminador encontrados')
+  except:
+    print('pesos de discriminador no encontrados, inicializando pesos')
+    netD.apply(weights_init)
+    shouldTrainGan = True
+  try:
+    netG.load_state_dict(torch.load('./netG_final.pth'))
+    print('pesos de generador encontrados')
+  except:
+    print('pesos de generador no encontrados, inicializando pesos')
+    netG.apply(weights_init)
+    shouldTrainGan = True
+  #entrenamiento
+  if shouldTrainGan:
+    ganTraining(netD, netG, trainloader, device, epochs)
+
+  #cnn normal
   normalCNN = CNN()
-  #ganTraining(netD, netG, trainloader, device, epochs)
-  #cnnTraining(normalCNN, trainloader, device, epochs)
-  fakeSet = generateFakeSet(netD, netG)
-  imshow(torchvision.utils.make_grid(torch.tensor(fakeSet[0][0])))
+  try:
+    normalCNN.load_state_dict(torch.load('./cnn_normal_final.pth'))
+    print('pesos de cnn normal encontrados')
+  except:
+    print('pesos de cnn normal no encontrados, inicializando pesos')
+    normalCNN.apply(weights_init)
+    device = 'cuda:0'
+    normalCNN.to(torch.device(device))
+    cnnTraining(normalCNN, trainloader, device, epochs, True)
+  #cnn fake
+  fakeCNN = CNN()
+  try:
+    fakeCNN.load_state_dict(torch.load('./cnn_fake_final.pth'))
+    print('pesos de cnn fake encontrados')
+  except:
+    print('pesos de cnn fake no encontrados, inicializando pesos')
+    #generación de set falso
+    device = 'cpu'
+    netD.to(torch.device(device))
+    netG.to(torch.device(device))
+    fakeSet = generateFakeSet(netD, netG)
+    print(fakeSet[0].size(), fakeSet[1].size())
+    #fakeSet = torch.stack(fakeSet)
+    fakeCNN.apply(weights_init)
+    device = 'cuda:0'
+    fakeCNN = CNN()
+    fakeCNN.to(torch.device(device))
+    print(fakeSet[1])
+    #fakeloader = torch.utils.data.TensorDataset(fakeSet)
+    #cnnTraining(fakeCNN, fakeloader, device, epochs, False)
+    imshow(torchvision.utils.make_grid(torch.tensor(fakeSet[0][0])))
